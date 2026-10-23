@@ -534,6 +534,12 @@ int usbd_ep_start_read(const uint8_t ep, uint8_t *data, uint32_t data_len)
     return 0;
 }
 
+/* Address assigned by SET_ADDRESS, applied to FADDR only after the status stage has
+ * completed (next EP0 interrupt), as the Essemi/vendor firmware does. Writing FADDR
+ * inside the SETUP handling makes the device stop answering at address 0 before the
+ * host has finished the status stage; macOS then abandons enumeration. */
+static volatile uint8_t es_usb_pending_address = 0;
+
 void handle_ep0(void)
 {
     uint8_t ep0_status = USB->CSR0L_TXCSRL;
@@ -547,6 +553,11 @@ void handle_ep0(void)
 
     if (ep0_status & ALD_USB_CSR0L_SETEND) {
         USB->CSR0L_TXCSRL = ALD_USB_CSR0L_SETENDC;
+    }
+
+    if (es_usb_pending_address != 0) {
+        USB->FADDR = es_usb_pending_address;
+        es_usb_pending_address = 0;
     }
 
     switch (usb_ep0_state) {
@@ -937,11 +948,12 @@ void usb_lld_reset(USBDriver *usbp)
  */
 void usb_lld_set_address(USBDriver *usbp)
 {
-    volatile uint32_t i;
-    
-    for(i = 0;i < 9999;i++){}
-    
-    USB->FADDR = usbp->address;
+    if (usbp->address == 0) {
+        USB->FADDR = 0;
+        es_usb_pending_address = 0;
+    } else {
+        es_usb_pending_address = usbp->address;
+    }
 }
 
 /**
